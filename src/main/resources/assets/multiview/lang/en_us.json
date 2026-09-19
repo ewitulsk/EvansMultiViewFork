@@ -1,7 +1,8 @@
 {
   "multiview.button.merge_selected": "Merge Selected",
   "multiview.button.merge_selected.count": "Merge %d Replays",
-  "multiview.button.merge_selected.no_overlap": "These replays were not recorded at the same time — their server gameTime ranges do not overlap, so merging them would produce broken entities (frozen mobs, missing equipment, default rotations). Pick replays from overlapping sessions.",
+  "multiview.button.merge_selected.empty": "One of the selected replays is empty (0 ticks) — a crashed or corrupt recording can't be a merge source.",
+  "multiview.button.merge_selected.gaps": "These replays form separate recording groups — parts of the merged replay will have no live source and appear frozen. Merge anyway if that is intended.",
   "multiview.merge_progress.title": "Merging Replays...",
   "multiview.merge_progress.done": "Merge complete!",
   "multiview.merge_progress.phase.opening": "Opening sources",

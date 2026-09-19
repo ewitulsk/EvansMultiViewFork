@@ -302,10 +302,15 @@ public final class MergeUi {
             if (meta != null) ticks = meta.totalTicks;
         } catch (Throwable ignore) { /* metadata unavailable — duration treated as 0 */ }
         long durationMs = (long) Math.max(0, ticks) * 50L;
-        // Prefer the recording instant parsed from the file name (immutable). The file's
-        // last-modified time is unreliable — a copy/move resets it, making unrelated replays
-        // look simultaneous — so it's only a fallback for user-renamed replays.
         Path path = summary.getPath();
+        // Best source: the recording-end instant embedded in the replay content itself
+        // (arcade_replay_meta.json → epoch_time_ms, written by ServerReplay). Immutable and
+        // unaffected by file copies or renames.
+        Long contentEnd = MergeUiLayout.contentRecordingEndMillis(path);
+        if (contentEnd != null) return new long[]{ contentEnd - durationMs, contentEnd };
+        // Next: the recording instant parsed from a Flashback-style file name (immutable).
+        // The file's last-modified time is unreliable — a copy/move resets it, making unrelated
+        // replays look simultaneous — so it's only a fallback for user-renamed replays.
         Long start = MergeUiLayout.replayStartMillis(path == null ? null : path.getFileName().toString());
         if (start != null) return new long[]{ start, start + durationMs };
         long end = summary.getLastModified();
@@ -340,48 +345,56 @@ public final class MergeUi {
 
         Component countMsg = Component.translatable("multiview.button.merge_selected.count", n);
 
-        // Same-moment guard (cheap, no I/O): an empty replay (0s duration) can't be a merge source,
-        // and the non-empty replays must have been recorded during overlapping real-world windows.
-        // Replays from different sessions/days don't overlap here, which the gameTime probe can't
-        // reliably tell apart — so this is what greys the button out.
+        // Empty/corrupt replay guard (cheap, no I/O): a 0-tick recording can't be a merge
+        // source — this stays a hard block.
         boolean anyEmpty = state.checkedPaths.stream()
                 .map(state.recWindows::get)
                 .anyMatch(w -> w != null && w[1] <= w[0]);
+        if (anyEmpty) {
+            fr.zeffut.multiview.telemetry.Telemetry.capture(
+                    fr.zeffut.multiview.telemetry.EventNames.EVT_OVERLAP_VALIDATION_FAILED,
+                    java.util.Map.of("selected_count", n, "reason", "empty_replay"));
+            state.mergeButton.active = false;
+            state.mergeButton.setMessage(countMsg);
+            state.mergeButton.setTooltip(Tooltip.create(
+                    Component.translatable("multiview.button.merge_selected.empty")));
+            return;
+        }
+
+        // Disjointness is a warning, not a block: chained recordings (players joining and
+        // leaving mid-session) form one overlap-connected component and merge into a coherent
+        // session tape; genuinely separate groups still merge correctly — the output just
+        // contains spans where no source was live.
         long[][] windows = state.checkedPaths.stream()
                 .map(state.recWindows::get)
                 .filter(w -> w != null && w[1] > w[0])
                 .toArray(long[][]::new);
-        if (anyEmpty || (windows.length >= 2 && !MergeUiLayout.allWindowsOverlap(windows))) {
+        boolean wallClockDisjoint =
+                windows.length >= 2 && MergeUiLayout.windowOverlapComponents(windows) > 1;
+        if (wallClockDisjoint) {
             fr.zeffut.multiview.telemetry.Telemetry.capture(
                     fr.zeffut.multiview.telemetry.EventNames.EVT_OVERLAP_VALIDATION_FAILED,
-                    java.util.Map.of("selected_count", n, "reason", "recording_time"));
-            state.mergeButton.active = false;
-            state.mergeButton.setMessage(countMsg);
-            state.mergeButton.setTooltip(Tooltip.create(
-                    Component.translatable("multiview.button.merge_selected.no_overlap")));
-            return;
+                    java.util.Map.of("selected_count", n, "reason", "recording_time_disjoint"));
         }
 
         Set<Path> snapshot = Set.copyOf(state.checkedPaths);
         OverlapValidator.Result result = VALIDATION_CACHE.computeIfAbsent(snapshot, s ->
                 OverlapValidator.validate(new ArrayList<>(s), PacketIdProvider.minecraftRuntime()));
 
-        if (result.status() == OverlapValidator.Status.NO_OVERLAP) {
+        boolean gameTimeDisjoint = result.status() == OverlapValidator.Status.NO_OVERLAP;
+        if (gameTimeDisjoint) {
             fr.zeffut.multiview.telemetry.Telemetry.capture(
                     fr.zeffut.multiview.telemetry.EventNames.EVT_OVERLAP_VALIDATION_FAILED,
-                    java.util.Map.of("selected_count", n));
-            state.mergeButton.active = false;
-            state.mergeButton.setMessage(countMsg);
-            state.mergeButton.setTooltip(Tooltip.create(
-                    Component.translatable("multiview.button.merge_selected.no_overlap")));
-        } else {
-            // OK or UNKNOWN — both allow the merge to proceed. UNKNOWN means we couldn't
-            // probe a SetTime anchor in one of the replays; rather than blocking what we
-            // can't verify, we let the user try (in line with [[feedback-product-philosophy]]).
-            state.mergeButton.active = true;
-            state.mergeButton.setMessage(countMsg);
-            state.mergeButton.setTooltip(null);
+                    java.util.Map.of("selected_count", n, "reason", "gametime_disjoint"));
         }
+
+        // OK, UNKNOWN or disjoint — all proceed. UNKNOWN means we couldn't probe a SetTime
+        // anchor; disjoint gets a warning tooltip explaining the frozen gaps.
+        state.mergeButton.active = true;
+        state.mergeButton.setMessage(countMsg);
+        state.mergeButton.setTooltip(wallClockDisjoint || gameTimeDisjoint
+                ? Tooltip.create(Component.translatable("multiview.button.merge_selected.gaps"))
+                : null);
     }
 
     // -------------------------------------------------------------------------

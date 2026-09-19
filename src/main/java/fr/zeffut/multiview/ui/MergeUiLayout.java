@@ -63,10 +63,9 @@ public final class MergeUiLayout {
 
     /**
      * True if every pair of recording windows overlaps in time — i.e. the replays were recorded
-     * during the same real-world moment (a precondition for a meaningful merge). Each window is
-     * {@code [startMs, endMs]}. With fewer than two windows there is nothing to contradict, so the
-     * result is {@code true} (the caller falls back to the gameTime check). Half-open intervals:
-     * two windows that merely touch at an endpoint count as disjoint.
+     * during the same real-world moment. Each window is {@code [startMs, endMs]}. With fewer than
+     * two windows there is nothing to contradict, so the result is {@code true}. Half-open
+     * intervals: two windows that merely touch at an endpoint count as disjoint.
      */
     public static boolean allWindowsOverlap(long[][] windows) {
         for (int i = 0; i < windows.length; i++) {
@@ -76,6 +75,73 @@ public final class MergeUiLayout {
             }
         }
         return true;
+    }
+
+    /**
+     * Counts the overlap-connected components among the recording windows. Two windows are linked
+     * when their intervals share at least one instant (half-open: touching endpoints don't link).
+     * A single component means every replay is reachable through a chain of overlapping
+     * recordings — enough for a coherent session-tape merge even when two particular replays
+     * never coexisted (A: 20:00–21:00, B: 20:30–22:00, C: 21:30–23:00). Multiple components means
+     * disjoint groups (e.g. two separate sessions); the merge engine still handles that, but the
+     * output will contain spans where no source was live. For interval sets, connectivity is a
+     * simple sweep: sorted by start, a new component begins whenever a window starts at or after
+     * the running max end.
+     */
+    public static int windowOverlapComponents(long[][] windows) {
+        if (windows == null || windows.length < 2) return windows == null ? 0 : windows.length;
+        long[][] sorted = windows.clone();
+        java.util.Arrays.sort(sorted, java.util.Comparator.comparingLong(w -> w[0]));
+        int components = 1;
+        long maxEnd = sorted[0][1];
+        for (int i = 1; i < sorted.length; i++) {
+            if (sorted[i][0] >= maxEnd) components++;
+            maxEnd = Math.max(maxEnd, sorted[i][1]);
+        }
+        return components;
+    }
+
+    /**
+     * Recording-end epoch-millis embedded in the replay itself. Arcade-writer replays
+     * (ServerReplay) carry {@code arcade_replay_meta.json} with an {@code epoch_time_ms} field —
+     * the wall-clock instant the recording stopped, immune to file copies/renames. Works on both
+     * {@code .zip} files and extracted replay folders. Returns {@code null} when absent or
+     * unreadable so callers can fall back to the file name / mtime.
+     */
+    public static Long contentRecordingEndMillis(java.nio.file.Path replayPath) {
+        if (replayPath == null) return null;
+        try {
+            if (java.nio.file.Files.isDirectory(replayPath)) {
+                java.nio.file.Path meta = replayPath.resolve("arcade_replay_meta.json");
+                if (!java.nio.file.Files.isRegularFile(meta)) return null;
+                return parseEpochTimeMs(java.nio.file.Files.readString(meta));
+            }
+            if (java.nio.file.Files.isRegularFile(replayPath)
+                    && replayPath.getFileName().toString().toLowerCase().endsWith(".zip")) {
+                try (java.nio.file.FileSystem fs = java.nio.file.FileSystems.newFileSystem(replayPath)) {
+                    java.nio.file.Path meta = fs.getPath("/arcade_replay_meta.json");
+                    if (!java.nio.file.Files.isRegularFile(meta)) return null;
+                    return parseEpochTimeMs(java.nio.file.Files.readString(meta));
+                }
+            }
+        } catch (Throwable ignore) {
+            return null;
+        }
+        return null;
+    }
+
+    /** Extracts the {@code "epoch_time_ms"} value — accepts both string and bare-number JSON. */
+    private static Long parseEpochTimeMs(String json) {
+        if (json == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"epoch_time_ms\"\\s*:\\s*\"?(\\d+)\"?")
+                .matcher(json);
+        if (!m.find()) return null;
+        try {
+            return Long.parseLong(m.group(1));
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**

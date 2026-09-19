@@ -17,11 +17,12 @@ import java.util.Optional;
  * Pre-merge guard: verifies that the selected replays' recorded windows overlap on the
  * monotonic server gameTime axis.
  *
- * <p>Without overlap, merging produces well-known artefacts (entities frozen mid-air,
- * default rotations, equipment desync) because the two recordings cover disjoint slices
- * of server time and there are no shared anchor packets to reconcile entity state across
- * the gap. This validator is meant to power a hard UI block before such merges are
- * attempted.
+ * <p>Overlap is transitive: replays that chain through overlapping intermediaries
+ * (players joining and leaving mid-session) form a single connected component and merge
+ * into one coherent session tape. Only a split into multiple gameTime-overlap
+ * components — genuinely separate recording groups — is flagged, and the UI treats that
+ * as a warning (the merged output simply contains spans where no source was live)
+ * rather than a hard block.
  *
  * <p>Pure logic — no Minecraft client API references — so it stays testable from
  * plain JVM tests and runs identically on both the classic and modern UI variants.
@@ -34,9 +35,9 @@ public final class OverlapValidator {
     private static final long MAX_PROBE_SEGMENT_BYTES = 256L * 1024L * 1024L; // 256 MB
 
     public enum Status {
-        /** All pairs share at least one gameTime tick. */
+        /** The selection forms a single overlap-connected component on the gameTime axis. */
         OK,
-        /** At least one pair has zero overlap on the gameTime axis. */
+        /** The selection splits into multiple gameTime-overlap components (disjoint groups). */
         NO_OVERLAP,
         /** A replay is missing a {@code ClientboundSetTimePacket} anchor — overlap undetermined. */
         UNKNOWN
@@ -53,15 +54,16 @@ public final class OverlapValidator {
     private record Interval(Path path, long start, long end) {}
 
     /**
-     * Probes each replay for its gameTime anchor + duration, then checks every pair for
-     * a non-empty intersection on the gameTime axis.
+     * Probes each replay for its gameTime anchor + duration, then checks whether the
+     * intervals form a single overlap-connected component on the gameTime axis.
      *
      * @param selected     replay folders the user wants to merge
      * @param idProvider   runtime packet-id mapping (must be the same instance the merge
      *                     would use, so that {@code ClientboundSetTimePacket} resolves to
      *                     the right id for the running MC version)
-     * @return {@link Result#ok()} when every pair overlaps,
-     *         {@link Result#noOverlap(Path, Path)} for the first disjoint pair we find,
+     * @return {@link Result#ok()} when the selection is one connected component,
+     *         {@link Result#noOverlap(Path, Path)} when it splits into disjoint groups
+     *         (reporting a boundary pair),
      *         or {@link Result#unknown()} if any replay has no detectable SetTime anchor.
      */
     public static Result validate(List<Path> selected, PacketIdProvider idProvider) {
@@ -122,17 +124,27 @@ public final class OverlapValidator {
             }
         }
 
-        for (int i = 0; i < intervals.size(); i++) {
-            for (int j = i + 1; j < intervals.size(); j++) {
-                Interval a = intervals.get(i);
-                Interval b = intervals.get(j);
-                long lo = Math.max(a.start(), b.start());
-                long hi = Math.min(a.end(), b.end());
-                if (lo >= hi) {
-                    MultiViewMod.LOGGER.info("[OverlapValidator] blocking merge: {} and {} have disjoint gameTime ranges",
-                            a.path().getFileName(), b.path().getFileName());
-                    return Result.noOverlap(a.path(), b.path());
-                }
+        // Connectivity check, not pairwise: replays that chain through overlapping
+        // intermediaries (players joining/leaving mid-session) form a single component
+        // and merge into one coherent session tape. Only a split into multiple
+        // gameTime components — genuinely separate recording groups — is reported.
+        // For interval sets a sorted sweep suffices: a new component starts whenever
+        // an interval begins at or after the running max end (half-open intervals).
+        intervals.sort(java.util.Comparator.comparingLong(Interval::start));
+        long maxEnd = intervals.get(0).end();
+        Interval maxEndInterval = intervals.get(0);
+        for (int i = 1; i < intervals.size(); i++) {
+            Interval in = intervals.get(i);
+            if (in.start() >= maxEnd) {
+                MultiViewMod.LOGGER.info("[OverlapValidator] selection splits into disjoint "
+                        + "gameTime groups: {} vs {} (separate recording clusters — merge "
+                        + "will contain unrecorded spans)",
+                        maxEndInterval.path().getFileName(), in.path().getFileName());
+                return Result.noOverlap(maxEndInterval.path(), in.path());
+            }
+            if (in.end() > maxEnd) {
+                maxEnd = in.end();
+                maxEndInterval = in;
             }
         }
         return Result.ok();

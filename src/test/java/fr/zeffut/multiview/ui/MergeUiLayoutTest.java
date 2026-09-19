@@ -128,4 +128,66 @@ class MergeUiLayoutTest {
         assertNull(MergeUiLayout.replayStartMillis("merged_20260610_120000.zip"));
         assertNull(MergeUiLayout.replayStartMillis(null));
     }
+
+    @Test
+    void windowOverlapComponentsCountsChains() {
+        // Chain: A∩B and B∩C overlap, A∩C disjoint → one component (session tape).
+        assertEquals(1, MergeUiLayout.windowOverlapComponents(new long[][]{
+                {1000, 5000}, {4000, 9000}, {8000, 12000}}));
+        // Two separate groups → two components.
+        assertEquals(2, MergeUiLayout.windowOverlapComponents(new long[][]{
+                {1000, 5000}, {2000, 6000}, {90000, 95000}, {91000, 96000}}));
+        // Touching endpoints don't link (half-open intervals).
+        assertEquals(2, MergeUiLayout.windowOverlapComponents(new long[][]{
+                {1000, 5000}, {5000, 9000}}));
+        // Nested windows stay one component.
+        assertEquals(1, MergeUiLayout.windowOverlapComponents(new long[][]{
+                {1000, 9000}, {3000, 4000}, {5000, 6000}}));
+        // Degenerate inputs.
+        assertEquals(1, MergeUiLayout.windowOverlapComponents(new long[][]{{1000, 5000}}));
+        assertEquals(0, MergeUiLayout.windowOverlapComponents(new long[][]{}));
+        assertEquals(0, MergeUiLayout.windowOverlapComponents(null));
+        // Pairwise-vs-component distinction: this set is NOT all-pairs-overlapping but
+        // IS one component — the regression the session-tape workflow needs.
+        long[][] chained = {{1000, 3000}, {2500, 6000}, {5500, 8000}};
+        assertFalse(MergeUiLayout.allWindowsOverlap(chained));
+        assertEquals(1, MergeUiLayout.windowOverlapComponents(chained));
+    }
+
+    @Test
+    void contentRecordingEndMillisReadsArcadeMeta(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws Exception {
+        // Zip-packaged replay (ServerReplay layout).
+        java.nio.file.Path zip = tmp.resolve("2026-09-18--21-54-59.zip");
+        try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                java.nio.file.Files.newOutputStream(zip))) {
+            zos.putNextEntry(new java.util.zip.ZipEntry("arcade_replay_meta.json"));
+            zos.write("{\"name\":\"X\",\"epoch_time_ms\":\"1789786903894\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new java.util.zip.ZipEntry("metadata.json"));
+            zos.write("{\"total_ticks\":8080}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zos.closeEntry();
+        }
+        assertEquals(1789786903894L, MergeUiLayout.contentRecordingEndMillis(zip));
+
+        // Extracted-folder replay.
+        java.nio.file.Path dir = tmp.resolve("extracted");
+        java.nio.file.Files.createDirectories(dir);
+        java.nio.file.Files.writeString(dir.resolve("arcade_replay_meta.json"),
+                "{\"epoch_time_ms\": 1234567890000}");
+        assertEquals(1234567890000L, MergeUiLayout.contentRecordingEndMillis(dir));
+
+        // No arcade meta → null (caller falls back to filename / mtime).
+        java.nio.file.Path dirNoMeta = tmp.resolve("plain");
+        java.nio.file.Files.createDirectories(dirNoMeta);
+        assertNull(MergeUiLayout.contentRecordingEndMillis(dirNoMeta));
+        assertNull(MergeUiLayout.contentRecordingEndMillis(null));
+        assertNull(MergeUiLayout.contentRecordingEndMillis(tmp.resolve("missing.zip")));
+
+        // Malformed value → null.
+        java.nio.file.Path dirBad = tmp.resolve("bad");
+        java.nio.file.Files.createDirectories(dirBad);
+        java.nio.file.Files.writeString(dirBad.resolve("arcade_replay_meta.json"), "{\"epoch_time_ms\":\"abc\"}");
+        assertNull(MergeUiLayout.contentRecordingEndMillis(dirBad));
+    }
 }

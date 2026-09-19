@@ -265,21 +265,24 @@ public final class HiddenClientScenario {
                 }
             }
             case 2 -> {
-                // Click the first two rows, one click per few ticks, through the real
+                // Click every replay row, one click per few ticks, through the real
                 // MouseHandler entry points.
-                if (uiClicksIssued == 0) {
-                    clickRow(minecraft, (SelectReplayScreen) MinecraftScreenAccess.getScreen(minecraft), 0);
+                int rows = replayListSize((SelectReplayScreen) MinecraftScreenAccess.getScreen(minecraft));
+                if (uiClicksIssued < rows && uiPhaseTicks++ > 10) {
+                    clickRow(minecraft, (SelectReplayScreen) MinecraftScreenAccess.getScreen(minecraft),
+                            uiClicksIssued);
                     uiClicksIssued++;
                     uiPhaseTicks = 0;
-                } else if (uiClicksIssued == 1 && uiPhaseTicks++ > 10) {
-                    clickRow(minecraft, (SelectReplayScreen) MinecraftScreenAccess.getScreen(minecraft), 1);
-                    uiClicksIssued++;
+                }
+                if (uiClicksIssued >= rows) {
                     uiPhase = 3;
                     uiPhaseTicks = 0;
                 }
             }
             case 3 -> {
-                // Two rows selected → merge button must become active (fixtures overlap).
+                // All rows selected → merge button must become active. A single
+                // overlap-connected selection carries no tooltip warning; a disjoint
+                // set still activates but shows the "separate groups" warning.
                 if (uiPhaseTicks == 30) {
                     // Diagnostic: did native selection see the clicks at all?
                     try {
@@ -294,11 +297,26 @@ public final class HiddenClientScenario {
                 }
                 if (uiPhaseTicks++ > 60) {
                     boolean active = mergeButton.active;
-                    LOGGER.info("HIDDEN_UI_SELECTED clicks={} buttonActive={} message='{}'",
-                            uiClicksIssued, active, mergeButton.getMessage().getString());
+                    // AbstractWidget.tooltip is a private WidgetTooltipHolder in 26.3 —
+                    // reflect to check whether the disjoint-groups warning was set.
+                    boolean warns = false;
+                    try {
+                        var tf = net.minecraft.client.gui.components.AbstractWidget.class.getDeclaredField("tooltip");
+                        tf.setAccessible(true);
+                        Object holder = tf.get(mergeButton);
+                        warns = holder.getClass().getMethod("get").invoke(holder) != null;
+                    } catch (ReflectiveOperationException e) {
+                        LOGGER.info("HIDDEN_UI_DIAG tooltip read failed: {}", e.getMessage());
+                    }
+                    LOGGER.info("HIDDEN_UI_SELECTED clicks={} buttonActive={} warnTooltip={} message='{}'",
+                            uiClicksIssued, active, warns, mergeButton.getMessage().getString());
                     if (!active) {
-                        throw new IllegalStateException("Merge button still inactive after selecting two overlapping replays (message='"
+                        throw new IllegalStateException("Merge button still inactive after selecting replays (message='"
                                 + mergeButton.getMessage().getString() + "')");
+                    }
+                    if (warns) {
+                        throw new IllegalStateException("Merge button shows disjoint-groups warning "
+                                + "for a selection that should form one overlap component");
                     }
                     LOGGER.info("HIDDEN_UI_PASS button injected, selection chain activates merge");
                     requestScreenshot(minecraft);
