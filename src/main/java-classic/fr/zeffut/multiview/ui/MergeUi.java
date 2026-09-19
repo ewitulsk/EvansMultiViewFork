@@ -1,5 +1,6 @@
 package fr.zeffut.multiview.ui;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.moulberry.flashback.Flashback;
 import com.moulberry.flashback.screen.ReplaySummary;
 import com.moulberry.flashback.screen.select_replay.ReplaySelectionEntry;
@@ -219,7 +220,7 @@ public final class MergeUi {
      */
     private static boolean handleRowClick(SelectionState state, SelectReplayScreen srs,
                                           double mouseX, double mouseY, int button) {
-        if (button != 0) return true; // only left-click
+        if (button != InputConstants.MOUSE_BUTTON_LEFT) return true; // only left-click
 
         ReplaySelectionList list = getSelectionList(srs);
         if (list == null) return true;

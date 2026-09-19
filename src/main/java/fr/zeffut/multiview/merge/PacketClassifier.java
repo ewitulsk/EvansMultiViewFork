@@ -35,6 +35,12 @@ public final class PacketClassifier {
                         || "flashback:action/accurate_player_position".equals(u.id())) {
                     yield Category.LOCAL_PLAYER;
                 }
+                // RealTimeClock records the wall-clock time for the editor's RTC overlay.
+                // Emitting it per-source would write N slightly-different clocks into the
+                // merged stream — keep the primary's only.
+                if ("flashback:action/real_time_clock_optional".equals(u.id())) {
+                    yield Category.LOCAL_PLAYER;
+                }
                 yield Category.PASSTHROUGH;
             }
             case Action.GamePacket gp -> gamePacketDispatch.apply(readPacketId(gp.bytes()));

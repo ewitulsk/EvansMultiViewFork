@@ -33,18 +33,39 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class MergeIntegrationTest {
 
-    static final Path REPLAYS_DIR = Path.of("run/flashback/replays");
-    static final List<String> SOURCE_ZIPS = List.of(
-            "2026-02-20T23_25_15.zip",
-            "Hika_Civ_4.zip",
-            "Jour_4_Romani_.zip",
-            "Sénat_empirenapo2026-02-20T23_20_16.zip"
-    );
+    // Replay sources are overridable so CI/devs can point at their own corpus:
+    //   -Dmultiview.testReplayDir=<dir>            base directory for relative names
+    //   -Dmultiview.testReplayZips=a.zip;b.zip     ';'-separated names or absolute paths
+    static final Path REPLAYS_DIR = Path.of(
+            System.getProperty("multiview.testReplayDir", "run/flashback/replays"));
+    static final List<String> SOURCE_ZIPS = sourceZips();
+
+    private static List<String> sourceZips() {
+        String prop = System.getProperty("multiview.testReplayZips");
+        if (prop == null || prop.isBlank()) {
+            return List.of(
+                    "2026-02-20T23_25_15.zip",
+                    "Hika_Civ_4.zip",
+                    "Jour_4_Romani_.zip",
+                    "Sénat_empirenapo2026-02-20T23_20_16.zip"
+            );
+        }
+        List<String> out = new ArrayList<>();
+        for (String s : prop.split(";")) {
+            if (!s.isBlank()) out.add(s.trim());
+        }
+        return List.copyOf(out);
+    }
+
+    private static Path resolveSource(String name) {
+        Path p = Path.of(name);
+        return p.isAbsolute() ? p : REPLAYS_DIR.resolve(name);
+    }
 
     static boolean replaysAvailable() {
-        if (!Files.isDirectory(REPLAYS_DIR)) return false;
+        if (SOURCE_ZIPS.isEmpty()) return false;
         for (String name : SOURCE_ZIPS) {
-            if (!Files.isRegularFile(REPLAYS_DIR.resolve(name))) return false;
+            if (!Files.isRegularFile(resolveSource(name))) return false;
         }
         return true;
     }
@@ -69,7 +90,7 @@ class MergeIntegrationTest {
         long startMs = System.currentTimeMillis();
         List<Path> sources = new ArrayList<>();
         for (String name : SOURCE_ZIPS) {
-            sources.add(REPLAYS_DIR.resolve(name));
+            sources.add(resolveSource(name));
         }
         Path dest = tmp.resolve("merged");
         MergeOptions options = new MergeOptions(sources, dest, Map.of(), false);

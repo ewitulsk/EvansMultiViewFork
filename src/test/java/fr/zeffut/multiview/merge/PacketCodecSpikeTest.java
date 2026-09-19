@@ -142,7 +142,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class PacketCodecSpikeTest {
 
-    private static final Path REPLAY_PATH = Path.of("run/replay/2026-02-20T23_25_15");
+    // -Dmultiview.testReplayPath=<dir> overrides the fixture (must be an extracted replay folder).
+    private static final Path REPLAY_PATH = Path.of(
+            System.getProperty("multiview.testReplayPath", "run/replay/2026-02-20T23_25_15"));
 
     static boolean replaysAvailable() {
         return Files.isDirectory(REPLAY_PATH);

@@ -23,6 +23,9 @@ bin/
 .loom-cache/
 run/
 
+# Hidden-client test evidence (see scripts/Test-ClientSmoke.ps1)
+artifacts/
+
 # OS
 .DS_Store
 Thumbs.db

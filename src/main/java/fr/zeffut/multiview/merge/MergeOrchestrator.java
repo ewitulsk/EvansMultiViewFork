@@ -155,6 +155,22 @@ public final class MergeOrchestrator {
                 replays.add(opened);
             }
 
+            // 1b. All sources must share one protocol version. Packets are merged at the
+            // byte level — mixing replays recorded under different MC protocol versions
+            // (e.g. 26.2 vs 26.3) would splice incompatible wire formats into one stream
+            // and produce a silently corrupt merged replay.
+            int mergeProtocol = replays.get(0).metadata().protocolVersion();
+            for (FlashbackReplay r : replays) {
+                int pv = r.metadata().protocolVersion();
+                if (pv != mergeProtocol) {
+                    throw new IOException("Refusing to merge replays recorded under different "
+                            + "protocol versions: " + replays.get(0).folder().getFileName()
+                            + " is protocol " + mergeProtocol + " but "
+                            + r.folder().getFileName() + " is protocol " + pv
+                            + " (" + r.metadata().versionString() + ").");
+                }
+            }
+
             // 2. Find anchors + align
             progress.accept("multiview.merge_progress.phase.aligning");
             PacketIdProvider idProvider = PacketIdProvider.minecraftRuntime();

@@ -104,6 +104,11 @@ public final class GamePacketDispatch {
         m.put(GamePacketTypes.CLIENTBOUND_BLOCK_EVENT, Category.WORLD);
         // ChunkBiomeDataS2CPacket (CHUNKS_BIOMES)
         m.put(GamePacketTypes.CLIENTBOUND_CHUNKS_BIOMES, Category.WORLD);
+        // ClientboundAddTransientBlockPacket (ADD_TRANSIENT_BLOCK) — new in 26.3.
+        // Transient (ghost) block state at a position: world state like BLOCK_UPDATE,
+        // routed through WorldPacketRewriter's passthrough (no LWW — transient blocks
+        // are per-viewer and idempotent when re-applied).
+        m.put(GamePacketTypes.CLIENTBOUND_ADD_TRANSIENT_BLOCK, Category.WORLD);
 
         // --- ENTITY packets ---
         // ClientboundAddEntityPacket (ADD_ENTITY)
@@ -146,6 +151,9 @@ public final class GamePacketDispatch {
         m.put(GamePacketTypes.CLIENTBOUND_DAMAGE_EVENT, Category.ENTITY);
         // ItemPickupAnimationS2CPacket (TAKE_ITEM_ENTITY)
         m.put(GamePacketTypes.CLIENTBOUND_TAKE_ITEM_ENTITY, Category.ENTITY);
+        // ClientboundSwingAnimationPacket (SWING_ANIMATION) — new in 26.3.
+        // First field is VarInt entityId → rewriteSingleEntityId remaps it.
+        m.put(GamePacketTypes.CLIENTBOUND_SWING_ANIMATION, Category.ENTITY);
 
         // --- EGO packets ---
         // HealthUpdateS2CPacket (SET_HEALTH)
@@ -194,6 +202,11 @@ public final class GamePacketDispatch {
         m.put(GamePacketTypes.CLIENTBOUND_SET_CHUNK_CACHE_RADIUS, Category.EGO);
         // SimulationDistanceS2CPacket
         m.put(GamePacketTypes.CLIENTBOUND_SET_SIMULATION_DISTANCE, Category.EGO);
+        // ClientboundPostEffectsPacket (POST_EFFECTS) — new in 26.3, registered on the
+        // common protocol but bundled into the play-phase clientbound set. Post effects
+        // are local-player screen state (like health/experience) — primary POV only.
+        m.put(net.minecraft.network.protocol.common.CommonPacketTypes.CLIENTBOUND_POST_EFFECTS,
+                Category.EGO);
 
         // --- GLOBAL packets ---
         // ClientboundPlayerInfoUpdatePacket (PLAYER_INFO_UPDATE, PLAYER_INFO_REMOVE)

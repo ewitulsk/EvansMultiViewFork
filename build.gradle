@@ -24,6 +24,12 @@ if (project.findProperty("no_intermediate") == "true") {
 // Forward -Pautoupdate.* Gradle properties to the dev client as -D system properties, so the
 // embedded auto-update module can be exercised in-game (e.g. -Pautoupdate.mods.dir=<folder of jars>
 // points the scanner at a test folder without loading those jars as mods).
+// The hidden-client test framework (src/main/java-testing) depends on the
+// renderpearl/SDL3 APIs that landed in MC 26.3 — it is only compiled for >= 26.3
+// targets so the older version builds keep working unchanged.
+def mcParts = project.minecraft_version.toString().tokenize('.')*.toInteger()
+def hiddenClientSupported = mcParts[0] > 26 || (mcParts[0] == 26 && mcParts[1] >= 3)
+
 loom {
     runs {
         client {
@@ -31,6 +37,14 @@ loom {
                 if (k.toString().startsWith("autoupdate.")) {
                     vmArg("-D${k}=${v}")
                 }
+            }
+            // Scripted hidden-client test harness (see scripts/Test-ClientSmoke.ps1).
+            if (providers.gradleProperty('multiviewClientRunDir').isPresent()) {
+                runDir providers.gradleProperty('multiviewClientRunDir').get()
+            }
+            if (providers.gradleProperty('multiviewClientScenario').isPresent()) {
+                vmArg '-Dmultiview.hiddenClient=true'
+                vmArg "-Dmultiview.clientScenario=${providers.gradleProperty('multiviewClientScenario').get()}"
             }
         }
     }
@@ -116,6 +130,11 @@ processResources {
             "mod_flashback_dep": modFbDep,
             "mod_java_dep": modJavaDep
         )
+        // The testing mixins only exist in >=26.3 builds (see java-testing sourceSet) —
+        // register the mixin config there and leave it empty for older targets.
+        if (hiddenClientSupported) {
+            filter { line -> line.replace('"mixins": []', '"mixins": ["multiview.mixins.json"]') }
+        }
     }
 }
 
@@ -139,6 +158,10 @@ sourceSets.main.java {
     } else {
         srcDir 'src/main/java-classic'
     }
+    // Hidden-client test framework — renderpearl/SDL3 APIs, only on >=26.3 targets.
+    if (hiddenClientSupported) {
+        srcDir 'src/main/java-testing'
+    }
 }
 
 java {
@@ -151,6 +174,13 @@ java {
 test {
     useJUnitPlatform()
     maxHeapSize = "4G"
+    // Forward replay-fixture overrides to the test JVM, e.g.
+    //   ./gradlew test -Dmultiview.testReplayZips="a.zip;b.zip" -Dmultiview.testReplayPath=run/replay/foo
+    ["multiview.testReplayDir", "multiview.testReplayZips", "multiview.testReplayPath"].each { key ->
+        if (System.getProperty(key) != null) {
+            systemProperty key, System.getProperty(key)
+        }
+    }
 }
 
 jar {
@@ -186,3 +216,111 @@ if (project.findProperty("no_intermediate") == "true") {
         enabled = false
     }
 }
+
+// Export the configured client launch as a standalone spec for scripted test runners.
+// Only project-configured environment additions are exported, never the host's environment.
+tasks.register('exportTestLaunches') {
+    dependsOn 'classes', 'configureClientLaunch', 'fixDevClassTweakers'
+    doLast {
+        def directory = file(providers.gradleProperty('multiviewLaunchExportDir').get())
+        directory.mkdirs()
+        def run = tasks.named('runClient').get()
+        def javaExecutable = run.javaLauncher.isPresent()
+            ? run.javaLauncher.get().executablePath.asFile.absolutePath
+            : new File(System.getProperty('java.home'), 'bin/java' + (org.gradle.nativeplatform.platform.internal.DefaultNativePlatform.currentOperatingSystem.isWindows() ? '.exe' : '')).absolutePath
+        def command = [javaExecutable]
+        // Project-owned scripted processes retain pause evidence beside their normal logs.
+        command.add('-Xlog:gc*,safepoint:file=jvm-pauses.log:time,uptime,level,tags:filecount=2,filesize=8M')
+        command.addAll(run.allJvmArgs)
+        command.addAll(run.jvmArgumentProviders.collectMany { it.asArguments() as List })
+        if (!run.classpath.empty) command.addAll(['-cp', run.classpath.asPath])
+        command.add(run.mainClass.get())
+        if (run.args != null) command.addAll(run.args as List)
+        command.addAll(run.argumentProviders.collectMany { it.asArguments() as List })
+        // Each exported launch owns its argument files.
+        command = command.withIndex().collect { argument, index ->
+            if (argument.startsWith('@')) {
+                def source = file(argument.substring(1).replaceAll('^"|"$', ''))
+                if (!source.isFile()) throw new GradleException('Missing launch argument file: ' + source)
+                def snapshot = new File(directory, 'client-arguments-' + index + '.txt')
+                snapshot.bytes = source.bytes
+                return '@' + snapshot.absolutePath
+            }
+            return argument
+        }
+        def runDirectory = providers.gradleProperty('multiviewClientRunDir').map { file(it).absolutePath }.getOrElse(run.workingDir.absolutePath)
+        def spec = [command: command, environment: run.environment, directory: runDirectory]
+        new File(directory, 'client-launch.json').text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(spec))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dev-runtime classTweaker namespace fixup.
+//
+// Fabric Loader 0.19 validates each mod's *.classtweaker namespace header against the
+// runtime namespace. Loom's no-intermediary remap produces official-namespace classes
+// but leaves the header token as 'named', so the dev client crashes at boot with
+// "Namespace (named) does not match current runtime namespace (official)". On MC 26.x
+// there is no intermediary layer at all — 'named' names are the same mojmap names as
+// 'official' — so rewriting just the header token in the loom-cache remapped jars
+// (recursing into META-INF/jars nested mods) makes the dev runtime accept them.
+// This only ever touches the local loom cache, never a published artifact.
+// ---------------------------------------------------------------------------
+private byte[] fixClassTweakerHeader(byte[] data) {
+    String head = new String(data, 0, Math.min(data.length, 64), java.nio.charset.StandardCharsets.UTF_8)
+    String text = null
+    if (head.startsWith('classTweaker\tv1\tnamed')) {
+        text = new String(data, java.nio.charset.StandardCharsets.UTF_8)
+                .replaceFirst('classTweaker\tv1\tnamed', 'classTweaker\tv1\tofficial')
+    } else if (head.startsWith('accessWidener\tv2\tnamed') || head.startsWith('accessWidener\tv1\tnamed')) {
+        text = new String(data, java.nio.charset.StandardCharsets.UTF_8)
+                .replaceFirst('(accessWidener\tv[12]\t)named', '$1official')
+    }
+    return text == null ? null : text.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+}
+
+private byte[] fixJarClassTweakers(byte[] input) {
+    def zis = new java.util.zip.ZipInputStream(new ByteArrayInputStream(input))
+    def out = new ByteArrayOutputStream(input.length + 4096)
+    def jos = new java.util.jar.JarOutputStream(out)
+    boolean changed = false
+    java.util.zip.ZipEntry e
+    while ((e = zis.nextEntry) != null) {
+        byte[] content = zis.readAllBytes()
+        if (e.name.endsWith('.classtweaker') || e.name.endsWith('.accesswidener')) {
+            byte[] fixed = fixClassTweakerHeader(content)
+            if (fixed != null) { content = fixed; changed = true }
+        } else if (e.name.endsWith('.jar')) {
+            byte[] fixed = fixJarClassTweakers(content)
+            if (fixed != null) { content = fixed; changed = true }
+        }
+        def ne = new java.util.jar.JarEntry(e.name)
+        ne.time = e.time
+        jos.putNextEntry(ne)
+        jos.write(content)
+        jos.closeEntry()
+    }
+    jos.finish()
+    jos.flush()
+    return changed ? out.toByteArray() : null
+}
+
+tasks.register('fixDevClassTweakers') {
+    def loomCacheDir = layout.projectDirectory.dir('.gradle/loom-cache/remapped_mods').asFile
+    onlyIf { loomCacheDir.isDirectory() }
+    doLast {
+        int rewritten = 0
+        fileTree(dir: loomCacheDir, include: '**/*.jar').files.each { File jar ->
+            byte[] fixed = fixJarClassTweakers(jar.bytes)
+            if (fixed != null) {
+                jar.bytes = fixed
+                rewritten++
+            }
+        }
+        if (rewritten > 0) {
+            logger.lifecycle("fixDevClassTweakers: rewrote 'named' -> 'official' headers in {} jar(s)", rewritten)
+        }
+    }
+}
+tasks.named('fixDevClassTweakers') { mustRunAfter 'configureClientLaunch' }
+tasks.named('runClient') { dependsOn 'fixDevClassTweakers' }

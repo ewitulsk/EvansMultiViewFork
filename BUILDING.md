@@ -1,7 +1,25 @@
 # Building MultiView for multiple Minecraft versions
 
 MultiView is published as one jar per supported MC range. Supported range today:
-**1.21.9 and newer**. MC 26.1+ is staged but blocked on Loom (see below).
+**1.21.9 and newer, including MC 26.3**.
+
+## MC 26.3 build notes
+
+`versions/26.3.properties` targets MC 26.3 with Loom 1.17 + `noIntermediateMappings()`
+(26.x ships unobfuscated — no intermediary/Yarn). Flashback 0.44.0-for-MC26.3 is a
+local port with no Modrinth release, so provision it manually before building:
+
+```
+libs/
+├── Flashback-0.44.0-for-MC26.3.jar   # build from the ewitulsk Flashback 26.3 port
+└── dev-jij/                          # Flashback's JiJ companions for runClient
+    ├── mixinconstraints-*.jar
+    ├── mixinsquared-*.jar
+    └── lattice-*.jar
+```
+
+With `libs/` populated, `./gradlew build` produces the 26.3 jar. Without it the
+build still compiles but skips Flashback API bindings (a warning is logged).
 
 ## Mappings stack
 
@@ -23,8 +41,9 @@ MultiView/
 ├── gradle.properties                # active build config (swapped by build-version.sh)
 ├── versions/
 │   ├── 1.21.9.properties            # MC 1.21.9 / 1.21.10
-│   ├── 1.21.11.properties           # MC 1.21.11 (current development target)
-│   └── 26.1.properties              # MC 26.1.x — blocked on Loom (see status table)
+│   ├── 1.21.11.properties           # MC 1.21.11
+│   ├── 26.1.properties              # MC 26.1.x
+│   └── 26.3.properties              # MC 26.3 (current development target)
 ├── libs/                            # local Flashback jars per MC range (gitignored)
 ├── scripts/
 │   ├── build-version.sh             # swaps properties + ./gradlew build
@@ -133,22 +152,29 @@ for now — see commit history for example calls. Project ID: `ja9dG9KW`.
 | 1.21 – 1.21.8    | dropped | n/a         | n/a          | not published |
 | 1.21.9 / 1.21.10 | ✓     | ✓ PASS        | ✓ PASS (record+merge harness) | ✓ id `t9NqZjHK` |
 | 1.21.11          | ✓     | ✓ PASS        | ✓ PASS (real multiplayer replays) | ✓ id `uXWEHvBV` |
-| 26.1.x           | blocked | blocked     | blocked      | not published |
+| 26.1.x           | staged | untested    | untested     | not published |
+| 26.3             | ✓     | ✓ PASS (real corpus) | ✓ PASS (hidden client: smoke/merge/mergeplay/ui) | not published |
 
-### Why 26.1+ is blocked
+### 26.x unblocked
 
-MC 26.1+ ships **unobfuscated** bytecode (no mappings needed). Flashback ships
-for 26.1 because they use a Loom 1.15-SNAPSHOT build that handles unobfuscated
-MC jars natively. Our stable Loom releases (1.15.5, 1.16.1) explicitly require
-a `mappings` declaration even when targeting unobfuscated MC, and Gradle's
-plugin DSL doesn't resolve the `1.15-SNAPSHOT` alias to actual snapshot builds
-— it falls back to release 1.15.5.
+The earlier "26.1+ blocked on Loom" issue is resolved: Loom **1.17-SNAPSHOT**
+handles unobfuscated MC jars natively and `loom.noIntermediateMappings()` skips
+the mappings declaration entirely (`no_intermediate=true` in the version
+properties). The historical blocker text was removed — see git history.
 
-Workarounds attempted (none viable in this session):
-- Pin exact snapshot timestamp via plugin DSL → unsupported syntax
-- `loom.noIntermediateMappings()` + omit `mappings` → "Configuration 'mappings' has no dependencies"
-- Resolution strategy override in `settings.gradle` → still resolves to release
-- Custom `buildscript` classpath → not attempted; ~half-day task
+### Hidden-client test framework (26.3+ only)
 
-When Loom ships stable support for unobfuscated MC (or we adopt the buildscript
-classpath workaround), `versions/26.1.properties` is ready to drop in.
+`src/main/java-testing` contains an in-process scripted client harness adapted
+from Flashback's port: hidden SDL window, synthetic mouse input, per-frame
+hidden/focus contract checks, and framebuffer-evidence screenshots. It is only
+compiled for ≥26.3 targets (renderpearl/SDL3 APIs).
+
+```powershell
+# scenario: smoke | merge | mergeplay | merge8 | ui
+scripts/Test-ClientSmoke.ps1 -Scenario merge `
+    -ReplaySources "a.zip;b.zip"   # ';'-separated replay paths (merge* and ui need ≥2)
+```
+
+The runner exports the dev-client launch via `exportTestLaunches`, spawns it
+windowless, validates `HIDDEN_*_PASS` log markers plus screenshot evidence, and
+writes `result.json` under `artifacts/client-<scenario>-<ts>/`.

@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "fr.zeffut.multiview.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "testing.MixinHiddenClient",
+    "testing.MixinHiddenMouse",
+    "testing.MixinHiddenWindow"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

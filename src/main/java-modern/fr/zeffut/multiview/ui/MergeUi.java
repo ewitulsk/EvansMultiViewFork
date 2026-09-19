@@ -12,6 +12,7 @@ import fr.zeffut.multiview.merge.OverlapValidator;
 import fr.zeffut.multiview.merge.PacketIdProvider;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Tooltip;
@@ -199,7 +200,7 @@ public final class MergeUi {
 
     private static boolean handleRowClick(SelectionState state, SelectReplayScreen srs,
                                           double mouseX, double mouseY, int button) {
-        if (button != 0) return true;
+        if (button != InputConstants.MOUSE_BUTTON_LEFT) return true;
 
         ReplaySelectionList list = getSelectionList(srs);
         if (list == null) return true;

@@ -663,6 +663,12 @@ public final class TestHarness implements ClientModInitializer {
 
     private void finalizeAndQuit(Minecraft mc) {
         writeResultFile();
+        // Under the hidden-client harness the scenario owns shutdown: it reads the
+        // result file, runs its own assertions and captures a screenshot before
+        // stopping the client itself. Stopping here would race all of that.
+        if (Boolean.getBoolean("multiview.hiddenClient")) {
+            return;
+        }
         // schedule stop on the next render frame
         mc.stop();
     }

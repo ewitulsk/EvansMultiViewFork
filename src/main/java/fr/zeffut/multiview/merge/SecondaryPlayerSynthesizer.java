@@ -9,7 +9,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.protocol.game.GamePacketTypes;
-import net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket;
+import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.core.RegistryAccess;
@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
  *   <li><b>ClientboundAddEntityPacket</b> — spawns a player entity at (0, 0, 0) with the
  *       secondary's UUID and a fresh global entity ID.  A subsequent TeleportEntity
  *       packet (synthesized from each PLAYER_POSITION EGO packet) will relocate it.</li>
- *   <li><b>ClientboundEntityPositionSyncPacket</b> (TELEPORT_ENTITY) — re-positions the fake
+ *   <li><b>ClientboundTeleportEntityPacket</b> (TELEPORT_ENTITY) — re-positions the fake
  *       player entity whenever the secondary source's PLAYER_POSITION packet fires.</li>
  * </ol>
  *
@@ -277,8 +277,14 @@ public final class SecondaryPlayerSynthesizer {
     }
 
     /**
-     * Synthesizes an {@code ClientboundEntityPositionSyncPacket} (TELEPORT_ENTITY) that moves
+     * Synthesizes a {@code ClientboundTeleportEntityPacket} (TELEPORT_ENTITY) that moves
      * the fake player entity to the given absolute position.
+     *
+     * <p>An empty relatives set makes every component absolute. On 26.2 this method
+     * encoded an {@code EntityPositionSync} body under the TELEPORT_ENTITY id, which
+     * missed the relatives-set field and failed to decode; on 26.3
+     * {@code ClientboundEntityPositionSyncPacket} moved to a {@code PositionPath}
+     * record anyway, so the real teleport packet is used here.
      *
      * @param entityId global entity ID of the fake player (from {@link #getFakeEntityId})
      * @param x        absolute X position
@@ -299,15 +305,16 @@ public final class SecondaryPlayerSynthesizer {
                     pitch
             );
 
-            ClientboundEntityPositionSyncPacket packet = new ClientboundEntityPositionSyncPacket(
+            ClientboundTeleportEntityPacket packet = ClientboundTeleportEntityPacket.teleport(
                     entityId,
                     pos,
-                    false          // onGround
+                    java.util.Set.of(),   // relatives — empty = absolute
+                    false                 // onGround
             );
 
             ByteBuf body = Unpooled.buffer(32);
             FriendlyByteBuf pbuf = new FriendlyByteBuf(body);
-            ClientboundEntityPositionSyncPacket.STREAM_CODEC.encode(pbuf, packet);
+            ClientboundTeleportEntityPacket.STREAM_CODEC.encode(pbuf, packet);
 
             return prependPacketId(idTeleportEntity, body);
         } catch (Throwable t) {
