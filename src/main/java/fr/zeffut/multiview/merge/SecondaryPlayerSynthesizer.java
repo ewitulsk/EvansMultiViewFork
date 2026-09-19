@@ -13,6 +13,7 @@ import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.phys.Vec3;
 
 import com.mojang.authlib.GameProfile;
@@ -57,6 +58,24 @@ public final class SecondaryPlayerSynthesizer {
     private final int idPlayerInfoUpdate;
     private final int idAddEntity;
     private final int idTeleportEntity;
+
+    /**
+     * Registry access that actually contains {@code minecraft:entity_type}.
+     * {@code RegistryAccess.EMPTY} has no registries at all, so encoding or decoding
+     * an {@code EntityType} holder through it throws "Missing registry". Mirroring
+     * {@link EntityPacketRewriter}: after Bootstrap the built-in root registry holds
+     * every vanilla registry; without Bootstrap (plain unit tests) we detect the
+     * empty entity_type registry and fall back to EMPTY, preserving stub behaviour.
+     */
+    private static RegistryAccess registryAccess() {
+        try {
+            if (BuiltInRegistries.ENTITY_TYPE.size() > 0) {
+                return RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
+            }
+        } catch (Throwable ignored) {
+        }
+        return RegistryAccess.EMPTY;
+    }
 
     public SecondaryPlayerSynthesizer(IdRemapper idRemapper) {
         this.idRemapper = idRemapper;
@@ -145,7 +164,7 @@ public final class SecondaryPlayerSynthesizer {
 
             // Skip EntityType encoded via EntityType.STREAM_CODEC (RegistryFriendlyByteBuf)
             // EntityType is encoded as a VarInt registry ID
-            RegistryFriendlyByteBuf regBuf = new RegistryFriendlyByteBuf(raw, RegistryAccess.EMPTY);
+            RegistryFriendlyByteBuf regBuf = new RegistryFriendlyByteBuf(raw, registryAccess());
             EntityType.STREAM_CODEC.decode(regBuf);
 
             // Now decode GameProfile via ByteBufCodecs.GAME_PROFILE
@@ -254,7 +273,7 @@ public final class SecondaryPlayerSynthesizer {
             );
 
             ByteBuf body = Unpooled.buffer(64);
-            RegistryFriendlyByteBuf registryBuf = new RegistryFriendlyByteBuf(body, RegistryAccess.EMPTY);
+            RegistryFriendlyByteBuf registryBuf = new RegistryFriendlyByteBuf(body, registryAccess());
             ClientboundAddEntityPacket.STREAM_CODEC.encode(registryBuf, packet);
 
             return prependPacketId(idAddEntity, body);
