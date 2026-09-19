@@ -66,6 +66,25 @@ public final class MergeOrchestrator {
     /** Maximum number of zip entries per source (zip-bomb guard — inode / FD exhaustion). */
     private static final int MAX_ZIP_ENTRIES_PER_SOURCE = 65_536;
 
+    /**
+     * Optional parent directory for source-extraction temp dirs, from
+     * {@code -Dmultiview.tmpDir=<dir>}. Returns {@code null} to use the JVM default
+     * ({@code java.io.tmpdir}).
+     */
+    private static Path tempDirParent() {
+        String prop = System.getProperty("multiview.tmpDir");
+        if (prop == null || prop.isBlank()) return null;
+        try {
+            Path p = Path.of(prop);
+            Files.createDirectories(p);
+            return p;
+        } catch (Throwable t) {
+            LOG.warn("MergeOrchestrator: multiview.tmpDir={} unusable ({}), "
+                    + "falling back to java.io.tmpdir", prop, t.getMessage());
+            return null;
+        }
+    }
+
     public static MergeReport run(MergeOptions options, Consumer<String> progress)
             throws IOException {
         // Validate inputs early — at least 2 sources required for a merge to be meaningful.
@@ -100,7 +119,13 @@ public final class MergeOrchestrator {
             for (Path src : options.sources()) {
                 Path sourceToOpen = src;
                 if (Files.isRegularFile(src) && src.getFileName().toString().endsWith(".zip")) {
-                    Path tempDir = Files.createTempDirectory("multiview-source-");
+                    // Extract to java.io.tmpdir by default; -Dmultiview.tmpDir=<dir>
+                    // redirects extraction — large corpora can exceed a small system
+                    // volume's free space while the replay folder lives elsewhere.
+                    Path tempParent = tempDirParent();
+                    Path tempDir = tempParent != null
+                            ? Files.createTempDirectory(tempParent, "multiview-source-")
+                            : Files.createTempDirectory("multiview-source-");
                     tempExtractDirs.add(tempDir);
                     long totalExtracted = 0L;
                     int entryCount = 0;

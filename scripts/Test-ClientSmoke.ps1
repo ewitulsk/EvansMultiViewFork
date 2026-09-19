@@ -48,6 +48,12 @@ function Start-TestProcess([string]$Side) {
     $spec = Get-Content (Join-Path $artifactPath "$Side-launch.json") -Raw | ConvertFrom-Json
     # DevAuth would attempt an interactive login; the hidden client uses the default offline profile.
     $args_ = [Collections.Generic.List[string]]::new()
+    # Source-zip extraction lands in java.io.tmpdir (usually the system drive); large
+    # corpora can exceed its free space, so redirect into the artifact dir which
+    # follows the project drive. MergeOrchestrator honours -Dmultiview.tmpDir.
+    $tmpDir = Join-Path $artifactPath 'tmp'
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $args_.Add("-Dmultiview.tmpDir=$tmpDir")
     for ($i = 1; $i -lt $spec.command.Count; $i++) {
         $arg = [string]$spec.command[$i]
         if ($arg -eq '-cp' -and $i + 1 -lt $spec.command.Count) {
